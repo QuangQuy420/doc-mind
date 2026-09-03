@@ -1,0 +1,42 @@
+[project]
+name = "docmind"
+version = "0.0.0"
+description = "DocMind monorepo root (uv workspace)"
+requires-python = ">=3.12,<3.13"
+dependencies = []
+
+[tool.uv.workspace]
+members = ["apps/api", "packages/shared", "lambdas/*"]
+
+[tool.uv.sources]
+docmind-shared = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pydantic>=2.7",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+# Docs, not source: ruff formats Python blocks inside markdown and these files are
+# owned by the owner/agent tooling.
+extend-exclude = [".claude", ".plans"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.mypy]
+strict = true
+python_version = "3.12"
+plugins = ["pydantic.mypy"]
+# Not "apps": that would walk apps/web/node_modules.
+files = ["apps/api", "packages"]
+
+[tool.pytest.ini_options]
+testpaths = ["apps", "packages", "lambdas"]
+asyncio_mode = "auto"

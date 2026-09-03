@@ -1,0 +1,17 @@
+{
+  "name": "docmind",
+  "private": true,
+  "version": "0.0.0",
+  "workspaces": [
+    "apps/web"
+  ],
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "npm run dev -w apps/web",
+    "build": "npm run build -w apps/web",
+    "lint": "npm run lint -w apps/web",
+    "format": "npm run format -w apps/web"
+  }
+}

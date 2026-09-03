@@ -1,0 +1,25 @@
+# Local development stores only. Nothing here is deployed to AWS.
+# postgres uses the same pgvector/pg16 image family as RDS Postgres 16 so
+# migrations behave the same locally and in AWS.
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: docmind-postgres
+    environment:
+      POSTGRES_DB: docmind
+      POSTGRES_USER: docmind
+      POSTGRES_PASSWORD: docmind
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+
+  dynamodb:
+    image: amazon/dynamodb-local
+    container_name: docmind-dynamodb
+    command: -jar DynamoDBLocal.jar -sharedDb -inMemory
+    ports:
+      - "8000:8000"
+
+volumes:
+  pgdata:

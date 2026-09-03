@@ -1,0 +1,30 @@
+# First "CI": the same lint/format gates run locally before every commit.
+# Install once with: pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.16.5
+    hooks:
+      - id: ruff-check
+        args: [--fix]
+      - id: ruff-format
+
+  # pre-commit/mirrors-prettier is archived, so prettier runs from the repo's own
+  # node_modules (npm workspace) as a local hook.
+  - repo: local
+    hooks:
+      - id: prettier
+        name: prettier
+        entry: npx prettier --check --ignore-unknown
+        language: system
+        files: ^apps/web/
+        exclude: node_modules|dist
+
+  # No-ops until infra/ exists (Phase 2); needs terraform on PATH once it does.
+  - repo: https://github.com/antonbabenko/pre-commit-terraform
+    rev: v1.109.0
+    hooks:
+      - id: terraform_fmt
+      - id: terraform_validate
+        args:
+          - --hook-config=--retry-once-with-cleanup=true
+          - --tf-init-args=-backend=false
