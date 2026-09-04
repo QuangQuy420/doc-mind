@@ -1,0 +1,21 @@
+# Copy to dev.auto.tfvars (git-ignored) and fill in. Terraform loads any
+# *.auto.tfvars automatically, so no -var-file flag is needed.
+
+# Region for every regional resource. Must match `region` in backend.tf.
+aws_region = "ap-southeast-1"
+
+# Where the 20 USD/month budget alerts are sent. Required.
+budget_email = "you@example.com"
+
+# Root domain for the app. Leave empty until Phase 4 (DNS + ACM).
+domain_name = ""
+
+# --- Cost toggles. Keep false; flip on only while actively testing, and flip
+# --- back (or `terraform destroy` the module) at the end of the session.
+enable_nat = false # NAT Gateway, ~32 USD/month + per-GB
+enable_rds = false # RDS db.t4g.micro, ~12-15 USD/month
+enable_ec2 = false # EC2 app instance, ~12 USD/month (+3.6 EIP while stopped)
+
+# Activate the `Project` cost allocation tag. Only works once the tag has shown
+# up in billing (~24h after the first billed resource).
+enable_cost_allocation_tag = false
