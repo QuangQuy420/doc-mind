@@ -114,10 +114,34 @@ could read from an output.
 
 ## Teardown between sessions
 
-Nothing in this phase is billable, so there is nothing to tear down yet. Once the
-expensive modules land (NAT in Phase 3, RDS in Phase 5, EC2 in Phase 8) this
-section gets the end-of-session routine: set the `enable_*` toggles back to
-`false`, `apply`, and confirm with a `plan` that shows no changes.
+The environment is designed to cost nothing while idle, but only if the toggles
+are actually back off. Run this at the end of every session that flipped one on:
+
+```bash
+# 1. Put every enable_* back to false in infra/envs/dev/dev.auto.tfvars
+$EDITOR infra/envs/dev/dev.auto.tfvars
+
+# 2. Destroy what the toggles created — read the plan, it should only remove.
+terraform -chdir=infra/envs/dev apply
+
+# 3. Prove nothing billable is left running.
+terraform -chdir=infra/envs/dev plan     # "No changes."
+```
+
+A `plan` that still shows changes means a toggle was missed or something was
+clicked in the console. `No changes` is the only acceptable end state.
+
+`terraform destroy` is the bigger hammer and is **not** the routine here: it
+removes the whole dev environment — VPC, budget and every later module — which
+is far more than this needs, and everything it would remove is free anyway. The
+state bucket and lock table are untouched either way; they belong to
+`infra/bootstrap`. Toggle off, don't destroy.
+
+Currently billable behind a toggle: `enable_nat` (Phase 3). `enable_rds`
+(Phase 5) and `enable_ec2` (Phase 8) join the list as those phases land — see
+the cost toggle table above. Note that `enable_ec2` keeps costing ~3.6 USD/month
+for its Elastic IP even while the instance is stopped, which is why "stop the
+instance" is not a substitute for flipping the toggle.
 
 ## Checks
 
