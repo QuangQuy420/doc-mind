@@ -60,3 +60,20 @@ module "rds" {
   subnet_ids        = module.vpc.private_subnet_ids
   security_group_id = module.vpc.rds_sg_id
 }
+
+# The login system: user pool, the browser's public app client and the Hosted UI
+# domain. Free at this scale (Essentials tier, first 10k monthly active users),
+# so no cost toggle — and a toggle on an identity store would be a footgun
+# anyway: flipping it back deletes every account.
+module "cognito" {
+  source = "../../modules/cognito"
+
+  name       = "docmind-dev-users"
+  aws_region = var.aws_region
+
+  # Byte-for-byte redirect targets: the Vite dev server for local work and the
+  # real SPA hostname, taken from the dns module's output so the name is built
+  # in exactly one place. The trailing slash is part of the match.
+  callback_urls = ["http://localhost:5173/", "https://${module.dns.site_fqdn}/"]
+  logout_urls   = ["http://localhost:5173/", "https://${module.dns.site_fqdn}/"]
+}
