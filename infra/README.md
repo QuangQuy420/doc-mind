@@ -153,7 +153,7 @@ could read from an output.
 |---|---|---|
 | `vpc` | 3 | VPC, 2 public + 2 private subnets across 2 AZs, IGW and route tables, S3/DynamoDB gateway endpoints, optional NAT, the app and RDS security groups |
 | `dns` | 4 | Route 53 hosted zone and records, the ACM certificate (us-east-1 for CloudFront) and its DNS validation |
-| `rds` | 5 | PostgreSQL instance, subnet group, parameter group, `random_password` and its SSM SecureString parameter |
+| `rds` | 5 | PostgreSQL instance, subnet group, `random_password`, and the two SSM parameters (SecureString password, plain host) |
 | `dynamodb` | 5 | The `documents` table, its `status-createdAt-index` GSI, streams and TTL |
 | `cognito` | 6 | User pool, password/email policy, the public PKCE app client, the hosted UI domain |
 | `ec2-app` | 8 | App instance and its instance profile, user data, SSM Session Manager access, ECR pull permissions |
@@ -178,6 +178,25 @@ terraform -chdir=infra/envs/dev plan     # "No changes."
 A `plan` that still shows changes means a toggle was missed or something was
 clicked in the console. `No changes` is the only acceptable end state.
 
+**`enable_rds` is the exception to step 1.** Once the database exists, leave
+`enable_rds = true` in `dev.auto.tfvars` forever: flipping it back and applying
+destroys the instance, and `skip_final_snapshot = true` means the data goes with
+it. Stop the instance instead — a stopped instance is still in state, so `plan`
+keeps saying `No changes`:
+
+```bash
+# End of session: stop it (no compute charge while stopped).
+aws rds stop-db-instance --db-instance-identifier docmind-dev-postgres
+
+# Next session: start it BEFORE any apply that modifies the instance —
+# an apply against a stopped instance fails.
+aws rds start-db-instance --db-instance-identifier docmind-dev-postgres
+```
+
+Two things to know: AWS starts a stopped instance again by itself after 7 days
+(so it has to be stopped again), and a stopped instance still bills its storage,
+about 2 USD/month for 20 GB of gp3.
+
 `terraform destroy` is the bigger hammer and is **not** the routine here: it
 removes the whole dev environment — VPC, budget and every later module — which
 is far more than this needs, and everything it would remove is free anyway except
@@ -185,9 +204,10 @@ the hosted zone — and destroying that costs a re-delegation at the registrar
 (see "DNS delegation"), not money. The state bucket and lock table are untouched
 either way; they belong to `infra/bootstrap`. Toggle off, don't destroy.
 
-Currently billable behind a toggle: `enable_nat` (Phase 3). `enable_rds`
-(Phase 5) and `enable_ec2` (Phase 8) join the list as those phases land — see
-the cost toggle table above. Note that `enable_ec2` keeps costing ~3.6 USD/month
+Currently billable behind a toggle: `enable_nat` (Phase 3) and `enable_rds`
+(Phase 5, stopped rather than toggled off — see above). `enable_ec2` (Phase 8)
+joins the list as that phase lands — see the cost toggle table above. Note that
+`enable_ec2` keeps costing ~3.6 USD/month
 for its Elastic IP even while the instance is stopped, which is why "stop the
 instance" is not a substitute for flipping the toggle. The one always-on cost, with no toggle, is
 the 0.50 USD/month hosted zone.
