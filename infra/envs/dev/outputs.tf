@@ -85,3 +85,25 @@ output "rds_endpoint_address" {
   value       = one(module.rds[*].endpoint_address)
   sensitive   = true
 }
+
+# --- Auth (module `cognito`) --------------------------------------------------
+
+output "cognito_user_pool_id" {
+  description = "Id of the user pool. Used for AWS CLI admin calls (creating or confirming a test user)."
+  value       = module.cognito.user_pool_id
+}
+
+output "cognito_client_id" {
+  description = "Id of the SPA app client. P7 passes it to the API as `COGNITO_CLIENT_ID`; P9 builds the SPA with it as `VITE_COGNITO_CLIENT_ID`."
+  value       = module.cognito.client_id
+}
+
+output "cognito_issuer" {
+  description = "OIDC issuer URL of the pool. P7 passes it to the API as `COGNITO_ISSUER` and fetches the JWKS from `<issuer>/.well-known/jwks.json`."
+  value       = module.cognito.issuer
+}
+
+output "cognito_hosted_ui_domain" {
+  description = "Base URL of the Hosted UI. Append the `/login?client_id=…&response_type=code&scope=openid+email+profile&redirect_uri=…` query to reach the login page."
+  value       = module.cognito.hosted_ui_domain
+}
