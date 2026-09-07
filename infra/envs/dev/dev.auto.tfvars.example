@@ -7,8 +7,8 @@ aws_region = "ap-southeast-1"
 # Where the 20 USD/month budget alerts are sent. Required.
 budget_email = "you@example.com"
 
-# Root domain for the app. Leave empty until Phase 4 (DNS + ACM).
-domain_name = ""
+# Required. Bare domain you own; see infra/README.md "DNS delegation".
+domain_name = "example.com"
 
 # --- Cost toggles. Keep false; flip on only while actively testing, and flip
 # --- back (or `terraform destroy` the module) at the end of the session.

@@ -5,9 +5,16 @@ variable "aws_region" {
 }
 
 variable "domain_name" {
-  description = "Root domain for the app (e.g. example.com). Empty until the DNS/ACM work in Phase 4."
+  description = "Root domain for the app (e.g. example.com). Required since P4."
   type        = string
-  default     = ""
+
+  # Catches the usual paste mistakes early (a URL, a trailing dot, capitals):
+  # Route 53 would accept some of them and then never match what the registrar
+  # delegates.
+  validation {
+    condition     = can(regex("^([a-z0-9-]+\\.)+[a-z]{2,}$", var.domain_name))
+    error_message = "domain_name must be a bare domain, lowercase, no scheme, no trailing dot."
+  }
 }
 
 variable "budget_email" {

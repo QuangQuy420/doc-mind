@@ -93,8 +93,55 @@ Anything billed while idle sits behind a `bool` variable defaulting to `false`
 | `enable_ec2` | EC2 app instance | 8 | ~12 USD/month for `t4g.small` 24/7 (+3.6 USD/month for the EIP while stopped) |
 | `enable_cost_allocation_tag` | `aws_ce_cost_allocation_tag` `Project` | 2 | 0 USD (needs the tag to appear in billing first, ~24h) |
 
+One accepted always-on exception: the Route 53 hosted zone (`dns`, Phase 4) at
+0.50 USD/month. It gets no toggle because destroying and recreating it hands out
+four new name servers, which would break the registrar delegation every time the
+toggle is flipped.
+
 The 20 USD/month budget (`envs/dev/budget.tf`) alerts by email at 50 %, 80 % and
 100 % of *actual* spend. Budgets alert; they do not stop anything.
+
+## DNS delegation
+
+The domain is bought at an external registrar, but the *records* live in a Route
+53 hosted zone managed here. The registrar only has to be told, once, which name
+servers to point at. Until that is done nothing in the zone resolves — and ACM's
+DNS validation blocks — so the first apply is deliberately targeted at the zone
+alone.
+
+```bash
+# 1. Set the domain (bare, lowercase, no scheme, no trailing dot).
+$EDITOR infra/envs/dev/dev.auto.tfvars        # domain_name = "your-domain.com"
+
+# 2. Create ONLY the hosted zone, then read its four name servers.
+terraform -chdir=infra/envs/dev apply -target=module.dns.aws_route53_zone.this
+terraform -chdir=infra/envs/dev output name_servers
+
+# 3. Replace the registrar's name servers with those four, then wait until the
+#    TLD servers hand them out. `+trace` asks from the root down, so a stale
+#    cached answer cannot fool you. Minutes to hours.
+dig NS your-domain.com +trace
+
+# 4. Full apply. ACM validates within a few minutes once DNS resolves.
+terraform -chdir=infra/envs/dev apply
+```
+
+A targeted apply prints `Warning: Applied changes may not be reflected in the
+outputs` — with `-target`, Terraform may skip refreshing the output values. If
+`terraform output name_servers` comes back empty, read them straight from state:
+
+```bash
+terraform -chdir=infra/envs/dev state show module.dns.aws_route53_zone.this
+```
+
+If step 4 fails with a validation timeout (ACM gives up after 75 minutes), the
+delegation was not live yet: check `dig` again and re-run `apply`.
+
+**Recreating the zone rotates its name servers.** A destroyed and re-applied
+zone (the "from zero" test, or any replacement of the resource) gets four new
+ones while the registrar still points at the old set, so delegation silently
+breaks. There is no `prevent_destroy` guarding it on purpose — repeat steps 2–4
+every time the zone is recreated.
 
 ## Module boundaries
 
@@ -133,15 +180,17 @@ clicked in the console. `No changes` is the only acceptable end state.
 
 `terraform destroy` is the bigger hammer and is **not** the routine here: it
 removes the whole dev environment — VPC, budget and every later module — which
-is far more than this needs, and everything it would remove is free anyway. The
-state bucket and lock table are untouched either way; they belong to
-`infra/bootstrap`. Toggle off, don't destroy.
+is far more than this needs, and everything it would remove is free anyway except
+the hosted zone — and destroying that costs a re-delegation at the registrar
+(see "DNS delegation"), not money. The state bucket and lock table are untouched
+either way; they belong to `infra/bootstrap`. Toggle off, don't destroy.
 
 Currently billable behind a toggle: `enable_nat` (Phase 3). `enable_rds`
 (Phase 5) and `enable_ec2` (Phase 8) join the list as those phases land — see
 the cost toggle table above. Note that `enable_ec2` keeps costing ~3.6 USD/month
 for its Elastic IP even while the instance is stopped, which is why "stop the
-instance" is not a substitute for flipping the toggle.
+instance" is not a substitute for flipping the toggle. The one always-on cost, with no toggle, is
+the 0.50 USD/month hosted zone.
 
 ## Checks
 

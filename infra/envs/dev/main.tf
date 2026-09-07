@@ -16,3 +16,18 @@ module "vpc" {
   az_count   = 2
   enable_nat = var.enable_nat
 }
+
+# The hosted zone for the domain and the CloudFront certificate for the SPA.
+# The certificate must be issued in us-east-1, so the module is handed both the
+# default provider and the aliased one; a module never picks a region itself.
+module "dns" {
+  source = "../../modules/dns"
+
+  providers = {
+    aws           = aws
+    aws.us_east_1 = aws.us_east_1
+  }
+
+  domain_name   = var.domain_name
+  site_hostname = "app"
+}
