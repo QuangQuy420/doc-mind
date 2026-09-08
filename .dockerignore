@@ -1,0 +1,20 @@
+# Build context is the repo root (uv workspace), so keep it small and secret-free.
+# Patterns are matched from the context root, hence the leading ** on the
+# per-directory ones.
+.git
+.venv
+node_modules
+infra
+apps/web
+**/tests
+# Local secrets must never enter an image layer. Unlike .gitignore, a bare
+# `.env` here matches only the context root, so nested apps/api/.env needs `**/`.
+**/.env
+**/.env.*
+!**/.env.example
+
+**/__pycache__
+**/*.py[cod]
+**/.mypy_cache
+**/.ruff_cache
+**/.pytest_cache
