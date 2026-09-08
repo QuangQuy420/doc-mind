@@ -36,6 +36,9 @@ python_version = "3.12"
 plugins = ["pydantic.mypy"]
 # Not "apps": that would walk apps/web/node_modules.
 files = ["apps/api", "packages"]
+# Alembic revision files are named `0001_...py` — not valid module identifiers, so mypy
+# refuses to even load them — and they are generated-style code we do not hand-type.
+exclude = ["apps/api/alembic/versions/"]
 
 [tool.pytest.ini_options]
 testpaths = ["apps", "packages", "lambdas"]
