@@ -156,8 +156,79 @@ could read from an output.
 | `rds` | 5 | PostgreSQL instance, subnet group, `random_password`, and the two SSM parameters (SecureString password, plain host) |
 | `dynamodb` | 5 | The `documents` table, its `status-createdAt-index` GSI, streams and TTL |
 | `cognito` | 6 | User pool, password/email policy, the public PKCE app client, the hosted UI domain |
-| `ec2-app` | 8 | App instance and its instance profile, user data, SSM Session Manager access, ECR pull permissions |
+| `ecr` | 8 | Private repository for the API image, scan-on-push, the keep-last-10 lifecycle policy |
+| `ec2-app` | 8 | App instance and its instance profile, user data, SSM Session Manager access, ECR pull permissions, the Elastic IP and the `api` A record |
 | `s3-site` | 9 | Private SPA bucket, CloudFront distribution and origin access control, cache behaviours |
+
+## The API image and the app host (Phase 8)
+
+The repository (`module.ecr`) and the log group are always created and cost
+nothing while empty. The host itself (`module.ec2_app`) is behind `enable_ec2`.
+Order matters: **push an image before flipping the toggle on**, or the instance
+spends its first ten minutes retrying the pull.
+
+```bash
+export AWS_PROFILE=docmind-dev
+REGISTRY=$(terraform -chdir=infra/envs/dev output -raw ecr_repository_url)
+
+# 1. Log in to the private registry. The token lasts 12 hours.
+aws ecr get-login-password --region ap-southeast-1 \
+  | docker login --username AWS --password-stdin "${REGISTRY%%/*}"
+
+# 2. Build for arm64 and push. The build host is x86 (WSL2) and the instance is
+#    Graviton, so `buildx` cross-builds — a plain `docker build` would produce an
+#    image the box cannot run ("exec format error"). Context is the REPO ROOT.
+docker buildx build --platform linux/arm64 -f apps/api/Dockerfile \
+  -t "$REGISTRY:latest" --push .
+
+# 3. Start the database first (the boot script runs the migration), then the host.
+aws rds start-db-instance --db-instance-identifier docmind-dev-postgres
+$EDITOR infra/envs/dev/dev.auto.tfvars        # enable_ec2 = true
+terraform -chdir=infra/envs/dev apply         # ~3 minutes until the API answers
+```
+
+A new image is picked up by replacing the instance, not by re-applying — the
+tag is mutable, so Terraform sees no change:
+
+```bash
+terraform -chdir=infra/envs/dev apply -replace=module.ec2_app[0].aws_instance.this
+```
+
+The same command is how a new Amazon Linux AMI is adopted: the AMI id comes from
+the "latest AL2023" SSM parameter but is `ignore_changes`, so AWS publishing a
+build never replaces the instance behind your back.
+
+### Shell access: Session Manager, not SSH
+
+There is no port 22 rule and no key pair anywhere in this project. Shell access
+goes through SSM, which needs no inbound rule, authenticates with IAM and logs
+the session.
+
+```bash
+# One-time on the workstation: the AWS CLI shells out to a separate binary.
+# https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html
+session-manager-plugin --version              # must print a version
+
+aws ssm start-session --target "$(terraform -chdir=infra/envs/dev output -raw ec2_instance_id)"
+
+# Inside the session — what to look at when the API does not answer:
+sudo docker ps                                # expect `api` and `caddy`, both Up
+sudo cat /var/log/cloud-init-output.log       # the whole boot script's output
+sudo docker logs caddy                        # certificate / ACME problems
+```
+
+`cloud-init-output.log` is the one that matters: the boot script runs with
+`set -euo pipefail`, so a failed migration stops it and *neither* container
+starts. Fix the cause, then replace the instance with the `-replace` command
+above — nothing retries on its own.
+
+### Logs
+
+Both containers write to the `/docmind/api` log group (7-day retention) through
+the Docker `awslogs` driver, in streams named `api-<instance-id>` and
+`caddy-<instance-id>`. The saved Logs Insights query
+`docmind-dev-api-p95-per-route` reports p95 latency and request count per path;
+open it from CloudWatch → Logs Insights → Queries.
 
 ## Teardown between sessions
 
@@ -204,13 +275,33 @@ the hosted zone — and destroying that costs a re-delegation at the registrar
 (see "DNS delegation"), not money. The state bucket and lock table are untouched
 either way; they belong to `infra/bootstrap`. Toggle off, don't destroy.
 
-Currently billable behind a toggle: `enable_nat` (Phase 3) and `enable_rds`
-(Phase 5, stopped rather than toggled off — see above). `enable_ec2` (Phase 8)
-joins the list as that phase lands — see the cost toggle table above. Note that
-`enable_ec2` keeps costing ~3.6 USD/month
-for its Elastic IP even while the instance is stopped, which is why "stop the
-instance" is not a substitute for flipping the toggle. The one always-on cost, with no toggle, is
-the 0.50 USD/month hosted zone.
+**`enable_ec2` is the opposite case to `enable_rds`: flip it off.** Stopping the
+instance only saves the compute. Two things keep billing on a stopped box:
+
+| Left behind by a stop | Cost |
+|---|---|
+| Elastic IP, now unattached to a *running* instance | ~3.6 USD/month |
+| 20 GB gp3 root volume | ~1.6 USD/month |
+
+```bash
+# Cheap pause, keeps the IP, the certificate and the host: ~5 USD/month.
+aws ec2 stop-instances --instance-ids "$(terraform -chdir=infra/envs/dev output -raw ec2_instance_id)"
+
+# Free: releases the EIP and the volume too. The `api` A record disappears with
+# the module, so DNS never points at nothing. Next session gets a new IP and a
+# freshly issued certificate — Let's Encrypt allows 5 duplicates per week, so
+# this is not a thing to do ten times a day.
+$EDITOR infra/envs/dev/dev.auto.tfvars        # enable_ec2 = false
+terraform -chdir=infra/envs/dev apply
+```
+
+Nothing in ECR is toggled: the images stay (~0.10 USD/GB/month, at most 10 of
+them) so the next session skips the push.
+
+Currently billable behind a toggle: `enable_nat` (Phase 3), `enable_rds`
+(Phase 5, stopped rather than toggled off — see above) and `enable_ec2`
+(Phase 8, toggled off — see just above). The one always-on cost, with no
+toggle, is the 0.50 USD/month hosted zone.
 
 ## Checks
 
