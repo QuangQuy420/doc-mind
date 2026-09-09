@@ -1,0 +1,133 @@
+#!/bin/bash
+# Rendered by Terraform from infra/modules/ec2-app/user_data.sh.tftpl.
+#
+# cloud-init runs this once, as root, on the FIRST boot only — a reboot does not
+# re-run it, which is why `user_data_replace_on_change = true` replaces the
+# instance whenever this file changes. Everything printed here lands in
+# /var/log/cloud-init-output.log; that file is the first thing to read when the
+# API does not come up.
+#
+# `-e` abort on the first failing command, `-u` abort on an unset variable,
+# `-o pipefail` abort when any stage of a pipe fails. A half-configured box that
+# looks healthy is worse than one that never started.
+set -euo pipefail
+
+echo "=== docmind user_data starting $(date -Is) ==="
+
+# --- Docker -------------------------------------------------------------------
+dnf install -y docker
+systemctl enable --now docker
+
+# A user-defined bridge network gives containers DNS by container name, so the
+# Caddyfile can say `reverse_proxy api:8000` and never learn an IP. The default
+# bridge has no such DNS.
+docker network create docmind || true
+
+# --- Pull the API image -------------------------------------------------------
+# The login token is fetched with the instance role, so no registry password
+# exists anywhere. It expires after 12 hours; nothing here needs it again.
+REGISTRY=$(echo "${image_url}" | cut -d/ -f1)
+aws ecr get-login-password --region ${region} | docker login --username AWS --password-stdin "$REGISTRY"
+
+IMAGE="${image_url}:${image_tag}"
+
+# The instance can legitimately exist before the first image is pushed (apply
+# creates the repository and the box in one run), so wait rather than fail:
+# 20 tries x 30 s = 10 minutes.
+for attempt in $(seq 1 20); do
+  if docker pull "$IMAGE"; then
+    break
+  fi
+  echo "pull of $IMAGE failed (attempt $attempt/20), retrying in 30s"
+  sleep 30
+done
+
+# Fail loudly instead of falling through to a confusing `docker run` error.
+docker image inspect "$IMAGE" >/dev/null
+
+# --- Application configuration ------------------------------------------------
+# 0700 directory, 0600 file, both root-owned: the DATABASE_URL appended below
+# carries the master password, so nothing unprivileged on the box may read it.
+# `install -m 600 /dev/null` creates the file already restricted, so there is no
+# window where it exists world-readable.
+install -d -m 700 /opt/docmind
+install -m 600 /dev/null /opt/docmind/api.env
+
+cat > /opt/docmind/api.env <<'ENVEOF'
+%{ for key, value in api_env ~}
+${key}=${value}
+%{ endfor ~}
+ENVEOF
+
+%{ if rds_enabled ~}
+# --- Database -----------------------------------------------------------------
+# The password is read at BOOT from Parameter Store with the instance role, so
+# it never appears in this script — and user data is readable by anything that
+# can reach the metadata service. A rotation therefore needs the instance
+# replaced; Phase 4 fixes that with Secrets Manager and an ECS task definition.
+DB_PASSWORD=$(aws ssm get-parameter --name '${pw_param}' --with-decryption --query Parameter.Value --output text --region ${region})
+DB_HOST=$(aws ssm get-parameter --name '${host_param}' --query Parameter.Value --output text --region ${region})
+
+# printf, not echo: the password is an argument, never part of the format
+# string, so no character in it can be interpreted.
+printf 'DATABASE_URL=postgresql+psycopg://%s:%s@%s:5432/%s\n' '${db_user}' "$DB_PASSWORD" "$DB_HOST" '${db_name}' >> /opt/docmind/api.env
+
+# Migrations run before the API starts, from the same image, so the code and the
+# schema can never disagree. `alembic upgrade head` is idempotent and there is
+# only one instance, so no lock is needed. If it fails (RDS stopped, wrong URL)
+# `set -e` stops here and neither container starts — deliberate: a running API
+# against a half-migrated database is worse.
+docker run --rm --env-file /opt/docmind/api.env "$IMAGE" alembic upgrade head
+%{ endif ~}
+
+# --- Containers ---------------------------------------------------------------
+# IMDSv2: PUT a token first, then send it as a header. The instance id becomes
+# the log stream suffix so a replaced box gets its own stream instead of
+# interleaving with the old one.
+TOKEN=$(curl -sS -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 300")
+INSTANCE_ID=$(curl -sS -H "X-aws-ec2-metadata-token: $TOKEN" "http://169.254.169.254/latest/meta-data/instance-id")
+
+# `--restart always` is what survives a reboot: cloud-init will not run again,
+# the Docker daemon starts both containers instead. The `awslogs` driver ships
+# stdout straight to CloudWatch with the instance role — no agent, no log files
+# on disk to rotate (12-factor: logs are an event stream, not a file).
+docker run -d \
+  --name api \
+  --restart always \
+  --network docmind \
+  --env-file /opt/docmind/api.env \
+  --log-driver awslogs \
+  --log-opt awslogs-region=${region} \
+  --log-opt awslogs-group=${log_group} \
+  --log-opt awslogs-stream=api-$INSTANCE_ID \
+  "$IMAGE"
+
+# Caddy terminates TLS. Two lines of config get an automatically issued and
+# renewed Let's Encrypt certificate — the reason this phase needs no ACM and no
+# load balancer. The name must already resolve to this box or the HTTP-01
+# challenge fails.
+cat > /opt/docmind/Caddyfile <<'CADDYEOF'
+${api_hostname}.${domain_name} {
+  reverse_proxy api:8000
+}
+CADDYEOF
+
+# caddy_data holds the issued certificate and the ACME account key. Keeping it
+# in a named volume means a container restart reuses the certificate instead of
+# asking again — Let's Encrypt allows only 5 duplicate certificates per week.
+docker run -d \
+  --name caddy \
+  --restart always \
+  --network docmind \
+  -p 80:80 \
+  -p 443:443 \
+  -v /opt/docmind/Caddyfile:/etc/caddy/Caddyfile:ro \
+  -v caddy_data:/data \
+  -v caddy_config:/config \
+  --log-driver awslogs \
+  --log-opt awslogs-region=${region} \
+  --log-opt awslogs-group=${log_group} \
+  --log-opt awslogs-stream=caddy-$INSTANCE_ID \
+  caddy:2-alpine
+
+echo "=== docmind user_data finished $(date -Is) ==="

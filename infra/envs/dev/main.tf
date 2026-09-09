@@ -77,3 +77,68 @@ module "cognito" {
   callback_urls = ["http://localhost:5173/", "https://${module.dns.site_fqdn}/"]
   logout_urls   = ["http://localhost:5173/", "https://${module.dns.site_fqdn}/"]
 }
+
+# The private registry for the API image. Always created: an empty repository
+# costs nothing, and the image has to be pushed before `enable_ec2` is flipped
+# on — a toggle here would mean apply, push, apply again.
+module "ecr" {
+  source = "../../modules/ecr"
+
+  name = "docmind-dev-api"
+}
+
+# The API host: one t4g.small running the image behind Caddy, with an Elastic IP
+# and the `api.<domain>` record. Behind a toggle at ~12 USD/month running — and
+# ~5 USD/month even while stopped, because the EIP and the root volume keep
+# billing. Flip it off (not just stop the instance) at the end of a session.
+module "ec2_app" {
+  source = "../../modules/ec2-app"
+  count  = var.enable_ec2 ? 1 : 0
+
+  name       = "docmind-dev"
+  aws_region = var.aws_region
+
+  # Element 0 is deterministically the subnet in AZ 0, so a re-apply never moves
+  # the host to the other AZ.
+  subnet_id         = module.vpc.public_subnet_ids[0]
+  security_group_id = module.vpc.app_sg_id
+
+  zone_id     = module.dns.zone_id
+  domain_name = var.domain_name
+
+  image_url          = module.ecr.repository_url
+  ecr_repository_arn = module.ecr.repository_arn
+
+  dynamodb_table_arn = module.dynamodb.table_arn
+
+  # Passing the resource attributes (not the literal name) is what makes the
+  # log group exist before the instance boots into the `awslogs` driver.
+  log_group_name = aws_cloudwatch_log_group.api.name
+  log_group_arn  = aws_cloudwatch_log_group.api.arn
+
+  # With `enable_rds = false` every one of these is null: user data then writes
+  # no DATABASE_URL, runs no migration, and the role gets no SSM statement.
+  rds_enabled                 = var.enable_rds
+  rds_password_parameter_arn  = one(module.rds[*].password_parameter_arn)
+  rds_password_parameter_name = one(module.rds[*].password_parameter_name)
+  rds_host_parameter_arn      = one(module.rds[*].host_parameter_arn)
+  rds_host_parameter_name     = one(module.rds[*].host_parameter_name)
+  db_name                     = one(module.rds[*].db_name)
+  db_username                 = one(module.rds[*].username)
+
+  # Non-secret configuration only — user data is readable from the metadata
+  # service. Keys match the settings fields in apps/api/app/core/config.py.
+  api_env = {
+    DYNAMODB_TABLE_NAME = module.dynamodb.table_name
+    COGNITO_ISSUER      = module.cognito.issuer
+    COGNITO_CLIENT_ID   = module.cognito.client_id
+
+    # The SPA's real origin plus the Vite dev server. `site_fqdn` comes from the
+    # dns module so the hostname is built in exactly one place, as the cognito
+    # callback wiring above already does.
+    CORS_ORIGINS = "https://${module.dns.site_fqdn},http://localhost:5173"
+
+    LOG_LEVEL  = "INFO"
+    AWS_REGION = var.aws_region
+  }
+}

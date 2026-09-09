@@ -107,3 +107,29 @@ output "cognito_hosted_ui_domain" {
   description = "Base URL of the Hosted UI. Append the `/login?client_id=…&response_type=code&scope=openid+email+profile&redirect_uri=…` query to reach the login page."
   value       = module.cognito.hosted_ui_domain
 }
+
+# --- API image (module `ecr`) -------------------------------------------------
+
+output "ecr_repository_url" {
+  description = "Registry URL to tag and push the API image to. Always present — the repository is not behind a toggle."
+  value       = module.ecr.repository_url
+}
+
+# --- API host (module `ec2-app`) ----------------------------------------------
+# All three are null while `enable_ec2 = false`, so `terraform output` still
+# works with the instance off.
+
+output "api_url" {
+  description = "Base URL the API answers on, e.g. https://api.example.com. Null while `enable_ec2 = false`."
+  value       = one(module.ec2_app[*].api_url)
+}
+
+output "ec2_instance_id" {
+  description = "Id of the API host. `aws ssm start-session --target $(terraform output -raw ec2_instance_id)` opens a shell on it. Null while `enable_ec2 = false`."
+  value       = one(module.ec2_app[*].instance_id)
+}
+
+output "ec2_public_ip" {
+  description = "Elastic IP the `api` record points at. Stable across instance replacements. Null while `enable_ec2 = false`."
+  value       = one(module.ec2_app[*].public_ip)
+}
