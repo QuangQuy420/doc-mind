@@ -142,3 +142,22 @@ module "ec2_app" {
     AWS_REGION = var.aws_region
   }
 }
+
+# The SPA: a private bucket behind a CloudFront distribution on
+# `https://app.<domain>`. No cost toggle — S3 storage for a few MB and
+# CloudFront's free tier (1 TB out, 10M requests/month) make this effectively
+# free, and a toggle would take the site down with it.
+module "s3_site" {
+  source = "../../modules/s3-site"
+
+  # S3 bucket names are globally unique across every AWS account, so the account
+  # id is part of the name — same trick as the state bucket in infra/bootstrap.
+  bucket_name = "docmind-dev-site-${data.aws_caller_identity.current.account_id}"
+
+  # Hostname, certificate and zone all come from the dns module: the name the
+  # certificate was issued for, the name the alias record creates and the name
+  # Cognito redirects back to are then one string in one place.
+  site_fqdn       = module.dns.site_fqdn
+  certificate_arn = module.dns.site_certificate_arn
+  zone_id         = module.dns.zone_id
+}

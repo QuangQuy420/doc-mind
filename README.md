@@ -57,6 +57,41 @@ docker compose exec postgres psql -U docmind -c "CREATE EXTENSION IF NOT EXISTS 
 
 Stop the local stores with `docker compose down` (add `-v` to drop the `pgdata` volume).
 
+## Run the app locally
+
+Two terminals from the repo root. Only Cognito is real; the API and both stores run on your
+machine, so this costs nothing. Details per app: [`apps/api/README.md`](apps/api/README.md) and
+[`apps/web/README.md`](apps/web/README.md).
+
+**1. API** (`http://localhost:8001`; 8000 is taken by DynamoDB Local)
+
+```bash
+cp apps/api/.env.example apps/api/.env   # fill COGNITO_ISSUER / COGNITO_CLIENT_ID from
+terraform -chdir=infra/envs/dev output   # `cognito_issuer` / `cognito_client_id`
+
+export AWS_PROFILE=docmind-dev           # boto3 needs *some* credentials, even for DynamoDB Local
+cd apps/api
+uv run --package docmind-api python scripts/create_local_table.py   # idempotent
+uv run --package docmind-api alembic upgrade head
+uv run --package docmind-api uvicorn app.main:app --reload --port 8001
+```
+
+`curl localhost:8001/health` should answer `"database": "ok"`.
+
+**2. Web** (`http://localhost:5173`)
+
+```bash
+cp apps/web/.env.example apps/web/.env.local   # fill from the same terraform outputs, with
+                                               # VITE_API_BASE_URL=http://localhost:8001 and
+                                               # VITE_REDIRECT_URI=http://localhost:5173/
+npm run dev -w apps/web
+```
+
+Open `http://localhost:5173`, click **Log in** (sign up in the Hosted UI on first use), then check
+**Me** (`user_id` from `/me`) and **Documents** (create one, it shows up in the list). To run
+against the deployed API instead, set `enable_ec2 = true` in `infra/envs/dev/dev.auto.tfvars`,
+apply, and point `VITE_API_BASE_URL` at the `api_url` output.
+
 ## Checks
 
 ```bash
@@ -67,7 +102,7 @@ uv run pytest                # tests
 pre-commit run --all-files   # everything the hooks would run
 ```
 
-Web checks (once `apps/web` exists): `npm run lint -w apps/web` and `npm run build -w apps/web`.
+Web checks: `npm run lint -w apps/web` and `npm run build -w apps/web`.
 
 ## Notes
 

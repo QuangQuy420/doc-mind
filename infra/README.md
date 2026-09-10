@@ -230,6 +230,39 @@ the Docker `awslogs` driver, in streams named `api-<instance-id>` and
 `docmind-dev-api-p95-per-route` reports p95 latency and request count per path;
 open it from CloudWatch → Logs Insights → Queries.
 
+## The SPA site (Phase 9)
+
+`module.s3_site` is always created: a private bucket, a CloudFront distribution
+on `https://app.<domain>` and the A/AAAA alias records. Nothing here is behind a
+toggle — a few MB of S3 plus CloudFront's free tier (1 TB out and 10M requests
+per month) is effectively 0 USD, and a toggle would take the site offline.
+
+The first `apply` takes ~5 minutes: creating or changing a distribution means
+pushing the config to every edge location.
+
+The bucket is empty until the SPA is uploaded. Terraform does not deploy the
+build — the site is data, not infrastructure:
+
+```bash
+export AWS_PROFILE=docmind-dev
+
+SITE_BUCKET=$(terraform -chdir=infra/envs/dev output -raw site_bucket_name) \
+CF_DIST_ID=$(terraform -chdir=infra/envs/dev output -raw cloudfront_distribution_id) \
+  npm run deploy -w apps/web
+```
+
+That script builds, uploads the content-hashed assets as
+`public,max-age=31536000,immutable`, uploads `index.html` as `no-cache`, and
+invalidates `/` and `/index.html` — two separate cache keys at the edge, because
+`/` is served through `default_root_object` and never collapses into
+`/index.html`. Hashed assets never need an invalidation: a new build has new file
+names. The first 1000 invalidation paths per month are free.
+
+Access is Origin Access Control: the bucket blocks all public access and its
+policy grants `s3:GetObject` to the `cloudfront.amazonaws.com` service principal
+only when `AWS:SourceArn` is this distribution. Nothing else, in this account or
+any other, can read the objects.
+
 ## Teardown between sessions
 
 The environment is designed to cost nothing while idle, but only if the toggles

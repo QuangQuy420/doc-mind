@@ -1,2 +1,5 @@
 node_modules
 dist
+openapi.json
+# Generated from the API OpenAPI schema by `npm run gen:api`.
+src/lib/api.types.ts
