@@ -133,3 +133,22 @@ output "ec2_public_ip" {
   description = "Elastic IP the `api` record points at. Stable across instance replacements. Null while `enable_ec2 = false`."
   value       = one(module.ec2_app[*].public_ip)
 }
+
+# --- SPA site (module `s3-site`) ----------------------------------------------
+# The three values the web build and the deploy script need; see
+# "The SPA site (Phase 9)" in infra/README.md.
+
+output "site_url" {
+  description = "Base URL of the SPA, without a trailing slash. The SPA is built with `VITE_REDIRECT_URI=<site_url>/` — the trailing slash is part of Cognito's byte-for-byte callback match."
+  value       = module.s3_site.site_url
+}
+
+output "site_bucket_name" {
+  description = "Name of the site bucket. The deploy script reads it as `SITE_BUCKET`."
+  value       = module.s3_site.bucket_name
+}
+
+output "cloudfront_distribution_id" {
+  description = "Id of the SPA distribution. The deploy script reads it as `CF_DIST_ID` to invalidate `/` and `/index.html`."
+  value       = module.s3_site.distribution_id
+}
